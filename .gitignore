@@ -1,0 +1,22 @@
+# Database (too large for GitHub)
+*.db
+
+# Config with credentials
+voynich_config.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+*.swp
+*.swo
+.idea/
+.vscode/

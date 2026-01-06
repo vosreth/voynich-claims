@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voynich Claims Explorer</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: Georgia, serif; max-width: 1400px; margin: 0 auto; padding: 20px; line-height: 1.5; font-size: 16px; }
+        h1 { color: #2c3e50; margin: 0 0 10px 0; }
+        .subtitle { color: #7f8c8d; margin-bottom: 20px; }
+        a { color: #2980b9; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        
+        .filters { background: #f5f5f5; padding: 15px; border-radius: 4px; margin-bottom: 20px; }
+        .filter-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 10px; }
+        .filter-row:last-child { margin-bottom: 0; }
+        .filters input[type="text"] { padding: 8px; width: 300px; border: 1px solid #ddd; border-radius: 3px; }
+        .filters select { padding: 8px; border: 1px solid #ddd; border-radius: 3px; min-width: 150px; }
+        .filters button { padding: 8px 16px; cursor: pointer; border: 1px solid #ddd; border-radius: 3px; background: white; }
+        .filters button:hover { background: #eee; }
+        .filter-label { color: #555; font-size: 0.9em; min-width: 60px; }
+        
+        .stats { color: #7f8c8d; margin-bottom: 15px; padding: 10px 0; border-bottom: 1px solid #eee; }
+        
+        .claim { background: #fafafa; padding: 8px 12px; margin: 3px 0; border-left: 3px solid #bdc3c7; cursor: pointer; }
+        .claim:hover { background: #f0f0f0; }
+        .claim.established { border-color: #27ae60; }
+        .claim.disputed { border-color: #f39c12; }
+        .claim.speculative { border-color: #95a5a6; }
+        .claim .meta { color: #7f8c8d; font-size: 0.85em; margin-left: 10px; }
+        .claim .src { margin-left: 8px; font-size: 0.85em; }
+        
+        .claim-detail { background: #fff; border: 1px solid #ddd; border-left: 3px solid #3498db; padding: 15px; margin: 5px 0 10px 0; }
+        .claim-detail .row { margin: 5px 0; }
+        .claim-detail .label { color: #7f8c8d; min-width: 80px; display: inline-block; }
+        
+        .stance { display: inline-block; padding: 1px 5px; border-radius: 3px; font-size: 0.75em; font-weight: bold; }
+        .stance.supports { background: #d4edda; color: #155724; }
+        .stance.disputes { background: #f8d7da; color: #721c24; }
+        .stance.mentions { background: #e2e3e5; color: #383d41; }
+        
+        .loading { text-align: center; padding: 40px; color: #7f8c8d; }
+        
+        .tag { display: inline-block; background: #ecf0f1; padding: 2px 8px; border-radius: 3px; font-size: 0.85em; margin: 1px; }
+    </style>
+</head>
+<body>
+    <h1>Voynich Claims Explorer</h1>
+    <p class="subtitle">~20,000 claims extracted from <a href="https://www.voynich.ninja" target="_blank">voynich.ninja</a> forum discussions</p>
+    
+    <div class="filters">
+        <div class="filter-row">
+            <span class="filter-label">Search:</span>
+            <input type="text" id="search" placeholder="Search claims...">
+            <button onclick="applyFilters()">Search</button>
+            <button onclick="clearFilters()">Clear All</button>
+        </div>
+        <div class="filter-row">
+            <span class="filter-label">Folio:</span>
+            <input type="text" id="folio-search" list="folio-list" placeholder="Type or select folio..." style="width:180px;">
+            <datalist id="folio-list"></datalist>
+            
+            <span class="filter-label" style="margin-left:20px;">Theory:</span>
+            <input type="text" id="theory-search" list="theory-list" placeholder="Type or select theory..." style="width:280px;">
+            <datalist id="theory-list"></datalist>
+        </div>
+        <div class="filter-row">
+            <span class="filter-label">Confidence:</span>
+            <select id="confidence">
+                <option value="">All</option>
+                <option value="established">Established</option>
+                <option value="disputed">Disputed</option>
+                <option value="speculative">Speculative</option>
+            </select>
+            
+            <span class="filter-label" style="margin-left:20px;">Evidence:</span>
+            <select id="evidence"><option value="">All types</option></select>
+        </div>
+    </div>
+    
+    <div class="stats" id="stats">Loading...</div>
+    <div id="claims"></div>
+    <div id="scroll-sentinel" style="height:1px;"></div>
+
+    <script>
+const BASE_URL = "https://www.voynich.ninja";
+let allClaims = [];
+let theories = [];
+let theoriesById = {};
+let theoryNameToId = {};
+let filteredClaims = [];
+let displayCount = 0;
+const BATCH_SIZE = 100;
+let loading = false;
+
+async function loadData() {
+    try {
+        const [claimsData, theoriesData, foliosData] = await Promise.all([
+            fetch('data/claims.json').then(r => r.json()),
+            fetch('data/theories.json').then(r => r.json()),
+            fetch('data/folios.json').then(r => r.json())
+        ]);
+        
+        allClaims = claimsData;
+        theories = theoriesData;
+        theoriesById = Object.fromEntries(theories.map(t => [t.id, t]));
+        theoryNameToId = Object.fromEntries(theories.map(t => [t.name.toLowerCase(), t.id]));
+        
+        // Populate folio datalist - standard folios first (alphabetical), others last
+        const folioList = document.getElementById('folio-list');
+        const standardFolios = [];
+        const otherFolios = [];
+        
+        Object.entries(foliosData).forEach(([f, count]) => {
+            if (/^f\d/.test(f)) {
+                standardFolios.push([f, count]);
+            } else {
+                otherFolios.push([f, count]);
+            }
+        });
+        
+        // Sort standard folios: extract number, then r/v
+        standardFolios.sort((a, b) => {
+            const matchA = a[0].match(/^f(\d+)([rv]?)(\d*)$/);
+            const matchB = b[0].match(/^f(\d+)([rv]?)(\d*)$/);
+            if (matchA && matchB) {
+                const numA = parseInt(matchA[1]);
+                const numB = parseInt(matchB[1]);
+                if (numA !== numB) return numA - numB;
+                if (matchA[2] !== matchB[2]) return matchA[2] === 'r' ? -1 : 1;
+                return (parseInt(matchA[3]) || 0) - (parseInt(matchB[3]) || 0);
+            }
+            return a[0].localeCompare(b[0]);
+        });
+        
+        // Sort others alphabetically
+        otherFolios.sort((a, b) => a[0].localeCompare(b[0]));
+        
+        [...standardFolios, ...otherFolios].forEach(([f, count]) => {
+            const opt = document.createElement('option');
+            opt.value = f;
+            opt.textContent = `${f} (${count})`;
+            folioList.appendChild(opt);
+        });
+        
+        // Populate theory datalist (only those with claims, sorted by count)
+        const theoryList = document.getElementById('theory-list');
+        theories
+            .filter(t => t.claim_count > 0)
+            .sort((a, b) => b.claim_count - a.claim_count)
+            .forEach(t => {
+                const opt = document.createElement('option');
+                opt.value = t.name;
+                opt.textContent = `${t.name} (${t.claim_count})`;
+                theoryList.appendChild(opt);
+            });
+        
+        // Populate evidence dropdown (only types with claims in current data)
+        const evidenceSelect = document.getElementById('evidence');
+        const evidenceCounts = {};
+        allClaims.forEach(c => {
+            if (c.evidence_type) {
+                evidenceCounts[c.evidence_type] = (evidenceCounts[c.evidence_type] || 0) + 1;
+            }
+        });
+        Object.entries(evidenceCounts)
+            .sort((a, b) => b[1] - a[1])
+            .forEach(([e, count]) => {
+                const opt = document.createElement('option');
+                opt.value = e;
+                opt.textContent = `${e} (${count})`;
+                evidenceSelect.appendChild(opt);
+            });
+        
+        // Add change listeners
+        ['confidence', 'evidence'].forEach(id => {
+            document.getElementById(id).addEventListener('change', applyFilters);
+        });
+        ['folio-search', 'theory-search'].forEach(id => {
+            document.getElementById(id).addEventListener('change', applyFilters);
+            document.getElementById(id).addEventListener('input', e => {
+                // Apply filter when user selects from datalist
+                if (e.inputType === 'insertReplacementText' || !e.inputType) {
+                    applyFilters();
+                }
+            });
+        });
+        document.getElementById('search').addEventListener('keyup', e => {
+            if (e.key === 'Enter') applyFilters();
+        });
+        
+        // Infinite scroll
+        const observer = new IntersectionObserver(entries => {
+            if (entries[0].isIntersecting && !loading && displayCount < filteredClaims.length) {
+                showMore();
+            }
+        }, { rootMargin: '200px' });
+        observer.observe(document.getElementById('scroll-sentinel'));
+        
+        applyFilters();
+    } catch (e) {
+        document.getElementById('stats').textContent = `Error loading data: ${e.message}`;
+    }
+}
+
+function applyFilters() {
+    const search = document.getElementById('search').value.toLowerCase().trim();
+    const folio = document.getElementById('folio-search').value.toLowerCase().trim();
+    const theoryName = document.getElementById('theory-search').value.trim();
+    const theoryId = theoryNameToId[theoryName.toLowerCase()];
+    const confidence = document.getElementById('confidence').value;
+    const evidence = document.getElementById('evidence').value;
+    
+    filteredClaims = allClaims.filter(c => {
+        if (folio && !(c.folios || '').toLowerCase().includes(folio)) return false;
+        if (theoryName && !c.theories?.some(t => t.id === theoryId || t.name.toLowerCase().includes(theoryName.toLowerCase()))) return false;
+        if (confidence && c.confidence !== confidence) return false;
+        if (evidence && c.evidence_type !== evidence) return false;
+        if (search && !c.assertion.toLowerCase().includes(search)) return false;
+        return true;
+    });
+    
+    // Sort: established first, then disputed, then speculative
+    const order = {established: 0, disputed: 1, speculative: 2};
+    filteredClaims.sort((a, b) => (order[a.confidence] ?? 3) - (order[b.confidence] ?? 3));
+    
+    displayCount = 0;
+    document.getElementById('claims').innerHTML = '';
+    showMore();
+}
+
+function showMore() {
+    if (loading) return;
+    loading = true;
+    
+    const container = document.getElementById('claims');
+    const end = Math.min(displayCount + BATCH_SIZE, filteredClaims.length);
+    
+    for (let i = displayCount; i < end; i++) {
+        container.appendChild(createClaimEl(filteredClaims[i]));
+    }
+    
+    displayCount = end;
+    updateStats();
+    loading = false;
+}
+
+function updateStats() {
+    let text = `Showing ${displayCount.toLocaleString()} of ${filteredClaims.length.toLocaleString()} claims`;
+    if (filteredClaims.length < allClaims.length) {
+        text += ` (filtered from ${allClaims.length.toLocaleString()} total)`;
+    }
+    document.getElementById('stats').textContent = text;
+}
+
+function createClaimEl(c) {
+    const div = document.createElement('div');
+    div.className = 'claim ' + (c.confidence || '');
+    div.onclick = () => toggleClaim(div, c);
+    
+    let html = escapeHtml(c.assertion);
+    
+    // Show folio tags
+    if (c.folios && c.folios !== 'general') {
+        const folioList = c.folios.split(',').slice(0, 3).map(f => f.trim()).join(', ');
+        html += ` <span class="meta">[${folioList}]</span>`;
+    }
+    
+    // Source link
+    const src = c.sources?.[0];
+    if (src) {
+        const url = src.post_id 
+            ? `${BASE_URL}/thread-${src.thread_id}.html?pid=${src.post_id}#pid${src.post_id}`
+            : `${BASE_URL}/thread-${src.thread_id}.html`;
+        html += ` <a class="src" href="${url}" target="_blank" onclick="event.stopPropagation()">src</a>`;
+    }
+    
+    div.innerHTML = html;
+    return div;
+}
+
+function toggleClaim(el, c) {
+    const existing = el.nextElementSibling;
+    if (existing?.classList.contains('claim-detail')) {
+        existing.remove();
+        return;
+    }
+    
+    const folioLinks = (c.folios || 'general').split(',').map(f => {
+        f = f.trim();
+        if (f && f !== 'general') {
+            return `<a onclick="document.getElementById('folio-search').value='${f}';applyFilters();window.scrollTo(0,0);">${f}</a>`;
+        }
+        return f;
+    }).join(', ');
+    
+    const theoryLinks = (c.theories || []).map(t => {
+        const theory = theoriesById[t.id];
+        return `<a onclick="document.getElementById('theory-search').value='${escapeHtml(t.name).replace(/'/g, "\\'")}';applyFilters();window.scrollTo(0,0);">${escapeHtml(t.name)}</a> <span class="stance ${t.stance}">${t.stance}</span>`;
+    }).join('<br>') || 'none';
+    
+    const src = c.sources?.[0];
+    const srcHTML = src ? `
+        <div class="row"><span class="label">Source:</span> 
+            <a href="${BASE_URL}/thread-${src.thread_id}.html" target="_blank">View thread</a>
+            ${src.post_id ? ` · <a href="${BASE_URL}/thread-${src.thread_id}.html?pid=${src.post_id}#pid${src.post_id}" target="_blank">Direct link to post</a>` : ''}
+        </div>
+    ` : '';
+    
+    const detail = document.createElement('div');
+    detail.className = 'claim-detail';
+    detail.innerHTML = `
+        <div class="row"><span class="label">Confidence:</span> ${c.confidence || 'unknown'}</div>
+        <div class="row"><span class="label">Evidence:</span> ${c.evidence_type || 'untyped'}</div>
+        <div class="row"><span class="label">Folios:</span> ${folioLinks}</div>
+        <div class="row"><span class="label">Theories:</span><br>${theoryLinks}</div>
+        ${srcHTML}
+    `;
+    el.after(detail);
+}
+
+function clearFilters() {
+    document.getElementById('search').value = '';
+    document.getElementById('folio-search').value = '';
+    document.getElementById('theory-search').value = '';
+    document.getElementById('confidence').value = '';
+    document.getElementById('evidence').value = '';
+    applyFilters();
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+loadData();
+    </script>
+</body>
+</html>
