@@ -43,9 +43,7 @@
         
         .claim { background: #fafafa; padding: 8px 12px; margin: 3px 0; border-left: 3px solid #bdc3c7; cursor: pointer; }
         .claim:hover { background: #f0f0f0; }
-        .claim.established { border-color: #27ae60; }
-        .claim.disputed { border-color: #f39c12; }
-        .claim.speculative { border-color: #95a5a6; }
+        
         .claim .meta { color: #7f8c8d; font-size: 0.85em; margin-left: 10px; }
         .claim .src { margin-left: 8px; font-size: 0.85em; }
         
@@ -94,15 +92,7 @@
             </div>
         </div>
         <div class="filter-row">
-            <span class="filter-label">Confidence:</span>
-            <select id="confidence">
-                <option value="">All</option>
-                <option value="established">Established</option>
-                <option value="disputed">Disputed</option>
-                <option value="speculative">Speculative</option>
-            </select>
-            
-            <span class="filter-label" style="margin-left:20px;">Evidence:</span>
+            <span class="filter-label">Evidence:</span>
             <select id="evidence"><option value="">All types</option></select>
         </div>
     </div>
@@ -158,9 +148,7 @@ async function loadData() {
                 evidenceSelect.appendChild(opt);
             });
         
-        ['confidence', 'evidence'].forEach(id => {
-            document.getElementById(id).addEventListener('change', applyFilters);
-        });
+        document.getElementById('evidence').addEventListener('change', applyFilters);
         document.getElementById('search').addEventListener('keyup', e => {
             if (e.key === 'Enter') applyFilters();
         });
@@ -361,7 +349,6 @@ function updateTheoryListSelection() {
 
 function applyFilters() {
     const search = document.getElementById('search').value.toLowerCase().trim();
-    const confidence = document.getElementById('confidence').value;
     const evidence = document.getElementById('evidence').value;
     
     filteredClaims = allClaims.filter(c => {
@@ -372,7 +359,6 @@ function applyFilters() {
         if (selectedTheoryIds.length > 0) {
             if (!c.theories?.some(t => selectedTheoryIds.includes(t.id))) return false;
         }
-        if (confidence && c.confidence !== confidence) return false;
         if (evidence && c.evidence_type !== evidence) return false;
         if (search && !c.assertion.toLowerCase().includes(search)) return false;
         return true;
@@ -412,7 +398,7 @@ function updateStats() {
 
 function createClaimEl(c) {
     const div = document.createElement('div');
-    div.className = 'claim ' + (c.confidence || '');
+    div.className = 'claim';
     div.onclick = () => toggleClaim(div, c);
     
     let html = escapeHtml(c.assertion);
@@ -465,7 +451,6 @@ function toggleClaim(el, c) {
     const detail = document.createElement('div');
     detail.className = 'claim-detail';
     detail.innerHTML = `
-        <div class="row"><span class="label">Confidence:</span> ${c.confidence || 'unknown'}</div>
         <div class="row"><span class="label">Evidence:</span> ${c.evidence_type || 'untyped'}</div>
         <div class="row"><span class="label">Folios:</span> ${folioLinks}</div>
         <div class="row"><span class="label">Theories:</span><br>${theoryLinks}</div>
@@ -476,7 +461,6 @@ function toggleClaim(el, c) {
 
 function clearFilters() {
     document.getElementById('search').value = '';
-    document.getElementById('confidence').value = '';
     document.getElementById('evidence').value = '';
     
     selectedFolios = [];
