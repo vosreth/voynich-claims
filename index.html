@@ -21,6 +21,24 @@
         .filters button:hover { background: #eee; }
         .filter-label { color: #555; font-size: 0.9em; min-width: 60px; }
         
+        .multi-select-container { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 5px; }
+        .selected-tags { display: inline-flex; flex-wrap: wrap; gap: 3px; }
+        .selected-tag { display: inline-flex; align-items: center; background: #3498db; color: white; padding: 3px 8px; border-radius: 3px; font-size: 0.85em; }
+        .selected-tag .remove { margin-left: 5px; cursor: pointer; opacity: 0.8; }
+        .selected-tag .remove:hover { opacity: 1; }
+        
+        .theory-dropdown { position: relative; display: inline-block; }
+        .theory-input { padding: 8px; border: 1px solid #ddd; border-radius: 3px; cursor: pointer; }
+        .theory-list { position: absolute; top: 100%; left: 0; max-height: 350px; overflow-y: auto; background: white; border: 1px solid #ddd; border-radius: 3px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); z-index: 100; display: none; }
+        .theory-list.open { display: block; }
+        .theory-search { width: calc(100% - 16px); margin: 8px; padding: 6px; border: 1px solid #ddd; border-radius: 3px; box-sizing: border-box; }
+        .theory-item { padding: 8px 12px; cursor: pointer; border-bottom: 1px solid #eee; }
+        .theory-item:hover { background: #f5f5f5; }
+        .theory-item.selected { background: #e8f4fc; }
+        .theory-item.selected::after { content: ' ✓'; color: #3498db; }
+        .theory-item .count { color: #7f8c8d; font-size: 0.85em; }
+        .theory-item.hidden { display: none; }
+        
         .stats { color: #7f8c8d; margin-bottom: 15px; padding: 10px 0; border-bottom: 1px solid #eee; }
         
         .claim { background: #fafafa; padding: 8px 12px; margin: 3px 0; border-left: 3px solid #bdc3c7; cursor: pointer; }
@@ -58,12 +76,22 @@
         </div>
         <div class="filter-row">
             <span class="filter-label">Folio:</span>
-            <input type="text" id="folio-search" list="folio-list" placeholder="Type or select folio..." style="width:180px;">
-            <datalist id="folio-list"></datalist>
+            <div class="multi-select-container">
+                <div class="selected-tags" id="folio-tags"></div>
+                <div class="theory-dropdown">
+                    <input type="text" class="theory-input" id="folio-input" placeholder="Add folio..." readonly style="width:150px;">
+                    <div class="theory-list" id="folio-list" style="width:200px;"></div>
+                </div>
+            </div>
             
             <span class="filter-label" style="margin-left:20px;">Theory:</span>
-            <input type="text" id="theory-search" list="theory-list" placeholder="Type or select theory..." style="width:280px;">
-            <datalist id="theory-list"></datalist>
+            <div class="multi-select-container">
+                <div class="selected-tags" id="theory-tags"></div>
+                <div class="theory-dropdown">
+                    <input type="text" class="theory-input" id="theory-input" placeholder="Add theory..." readonly style="width:200px;">
+                    <div class="theory-list" id="theory-list" style="width:400px;"></div>
+                </div>
+            </div>
         </div>
         <div class="filter-row">
             <span class="filter-label">Confidence:</span>
@@ -89,14 +117,17 @@ let allClaims = [];
 let theories = [];
 let theoriesById = {};
 let theoryNameToId = {};
+let foliosData = {};
 let filteredClaims = [];
 let displayCount = 0;
+let selectedFolios = [];
+let selectedTheoryIds = [];
 const BATCH_SIZE = 100;
 let loading = false;
 
 async function loadData() {
     try {
-        const [claimsData, theoriesData, foliosData] = await Promise.all([
+        const [claimsData, theoriesData, foliosJson] = await Promise.all([
             fetch('data/claims.json').then(r => r.json()),
             fetch('data/theories.json').then(r => r.json()),
             fetch('data/folios.json').then(r => r.json())
@@ -106,57 +137,11 @@ async function loadData() {
         theories = theoriesData;
         theoriesById = Object.fromEntries(theories.map(t => [t.id, t]));
         theoryNameToId = Object.fromEntries(theories.map(t => [t.name.toLowerCase(), t.id]));
+        foliosData = foliosJson;
         
-        // Populate folio datalist - standard folios first (alphabetical), others last
-        const folioList = document.getElementById('folio-list');
-        const standardFolios = [];
-        const otherFolios = [];
+        buildFolioDropdown();
+        buildTheoryDropdown();
         
-        Object.entries(foliosData).forEach(([f, count]) => {
-            if (/^f\d/.test(f)) {
-                standardFolios.push([f, count]);
-            } else {
-                otherFolios.push([f, count]);
-            }
-        });
-        
-        // Sort standard folios: extract number, then r/v
-        standardFolios.sort((a, b) => {
-            const matchA = a[0].match(/^f(\d+)([rv]?)(\d*)$/);
-            const matchB = b[0].match(/^f(\d+)([rv]?)(\d*)$/);
-            if (matchA && matchB) {
-                const numA = parseInt(matchA[1]);
-                const numB = parseInt(matchB[1]);
-                if (numA !== numB) return numA - numB;
-                if (matchA[2] !== matchB[2]) return matchA[2] === 'r' ? -1 : 1;
-                return (parseInt(matchA[3]) || 0) - (parseInt(matchB[3]) || 0);
-            }
-            return a[0].localeCompare(b[0]);
-        });
-        
-        // Sort others alphabetically
-        otherFolios.sort((a, b) => a[0].localeCompare(b[0]));
-        
-        [...standardFolios, ...otherFolios].forEach(([f, count]) => {
-            const opt = document.createElement('option');
-            opt.value = f;
-            opt.textContent = `${f} (${count})`;
-            folioList.appendChild(opt);
-        });
-        
-        // Populate theory datalist (only those with claims, sorted by count)
-        const theoryList = document.getElementById('theory-list');
-        theories
-            .filter(t => t.claim_count > 0)
-            .sort((a, b) => b.claim_count - a.claim_count)
-            .forEach(t => {
-                const opt = document.createElement('option');
-                opt.value = t.name;
-                opt.textContent = `${t.name} (${t.claim_count})`;
-                theoryList.appendChild(opt);
-            });
-        
-        // Populate evidence dropdown (only types with claims in current data)
         const evidenceSelect = document.getElementById('evidence');
         const evidenceCounts = {};
         allClaims.forEach(c => {
@@ -173,24 +158,13 @@ async function loadData() {
                 evidenceSelect.appendChild(opt);
             });
         
-        // Add change listeners
         ['confidence', 'evidence'].forEach(id => {
             document.getElementById(id).addEventListener('change', applyFilters);
-        });
-        ['folio-search', 'theory-search'].forEach(id => {
-            document.getElementById(id).addEventListener('change', applyFilters);
-            document.getElementById(id).addEventListener('input', e => {
-                // Apply filter when user selects from datalist
-                if (e.inputType === 'insertReplacementText' || !e.inputType) {
-                    applyFilters();
-                }
-            });
         });
         document.getElementById('search').addEventListener('keyup', e => {
             if (e.key === 'Enter') applyFilters();
         });
         
-        // Infinite scroll
         const observer = new IntersectionObserver(entries => {
             if (entries[0].isIntersecting && !loading && displayCount < filteredClaims.length) {
                 showMore();
@@ -198,30 +172,212 @@ async function loadData() {
         }, { rootMargin: '200px' });
         observer.observe(document.getElementById('scroll-sentinel'));
         
+        document.addEventListener('click', e => {
+            const theoryDropdown = document.getElementById('theory-list');
+            const theoryInput = document.getElementById('theory-input');
+            const folioDropdown = document.getElementById('folio-list');
+            const folioInput = document.getElementById('folio-input');
+            
+            if (!theoryDropdown.contains(e.target) && e.target !== theoryInput) {
+                theoryDropdown.classList.remove('open');
+            }
+            if (!folioDropdown.contains(e.target) && e.target !== folioInput) {
+                folioDropdown.classList.remove('open');
+            }
+        });
+        
         applyFilters();
     } catch (e) {
         document.getElementById('stats').textContent = `Error loading data: ${e.message}`;
     }
 }
 
+function buildFolioDropdown() {
+    const input = document.getElementById('folio-input');
+    const list = document.getElementById('folio-list');
+    
+    const standardFolios = [];
+    const otherFolios = [];
+    
+    Object.entries(foliosData).forEach(([f, count]) => {
+        if (/^f\d/.test(f)) {
+            standardFolios.push([f, count]);
+        } else {
+            otherFolios.push([f, count]);
+        }
+    });
+    
+    standardFolios.sort((a, b) => {
+        const matchA = a[0].match(/^f(\d+)([rv]?)(\d*)$/);
+        const matchB = b[0].match(/^f(\d+)([rv]?)(\d*)$/);
+        if (matchA && matchB) {
+            const numA = parseInt(matchA[1]);
+            const numB = parseInt(matchB[1]);
+            if (numA !== numB) return numA - numB;
+            if (matchA[2] !== matchB[2]) return matchA[2] === 'r' ? -1 : 1;
+            return (parseInt(matchA[3]) || 0) - (parseInt(matchB[3]) || 0);
+        }
+        return a[0].localeCompare(b[0]);
+    });
+    
+    otherFolios.sort((a, b) => b[1] - a[1]);
+    
+    let html = `<input type="text" class="theory-search" id="folio-filter" placeholder="Filter folios..." onclick="event.stopPropagation()">`;
+    
+    standardFolios.forEach(([f, count]) => {
+        html += `<div class="theory-item" data-folio="${f}" data-name="${f}" onclick="event.stopPropagation();toggleFolio('${f}')">${f} <span class="count">(${count})</span></div>`;
+    });
+    
+    if (otherFolios.length > 0) {
+        html += `<div style="padding:8px 12px; color:#7f8c8d; font-size:0.85em; border-bottom:1px solid #eee;">Other references</div>`;
+        otherFolios.forEach(([f, count]) => {
+            html += `<div class="theory-item" data-folio="${f}" data-name="${f}" onclick="event.stopPropagation();toggleFolio('${f}')">${f} <span class="count">(${count})</span></div>`;
+        });
+    }
+    
+    list.innerHTML = html;
+    
+    input.addEventListener('click', () => {
+        list.classList.add('open');
+        document.getElementById('folio-filter').focus();
+    });
+    
+    document.getElementById('folio-filter').addEventListener('input', e => {
+        const filter = e.target.value.toLowerCase();
+        document.querySelectorAll('#folio-list .theory-item[data-name]').forEach(item => {
+            const name = item.dataset.name;
+            item.classList.toggle('hidden', !name.includes(filter));
+        });
+    });
+}
+
+function toggleFolio(folio) {
+    const index = selectedFolios.indexOf(folio);
+    if (index > -1) {
+        selectedFolios.splice(index, 1);
+    } else {
+        selectedFolios.push(folio);
+    }
+    updateFolioTags();
+    updateFolioListSelection();
+    applyFilters();
+}
+
+function removeFolio(folio) {
+    const index = selectedFolios.indexOf(folio);
+    if (index > -1) {
+        selectedFolios.splice(index, 1);
+        updateFolioTags();
+        updateFolioListSelection();
+        applyFilters();
+    }
+}
+
+function updateFolioTags() {
+    const container = document.getElementById('folio-tags');
+    document.getElementById('folio-input').value = '';
+    container.innerHTML = selectedFolios.map(f => 
+        `<span class="selected-tag">${f}<span class="remove" onclick="event.stopPropagation();removeFolio('${f}')">×</span></span>`
+    ).join('');
+}
+
+function updateFolioListSelection() {
+    document.querySelectorAll('#folio-list .theory-item[data-folio]').forEach(el => {
+        el.classList.toggle('selected', selectedFolios.includes(el.dataset.folio));
+    });
+}
+
+function buildTheoryDropdown() {
+    const input = document.getElementById('theory-input');
+    const list = document.getElementById('theory-list');
+    
+    const theoriesWithClaims = theories
+        .filter(t => t.claim_count > 0)
+        .sort((a, b) => b.claim_count - a.claim_count);
+    
+    let html = `<input type="text" class="theory-search" id="theory-filter" placeholder="Filter theories..." onclick="event.stopPropagation()">`;
+    html += `<div class="theory-item" data-id="null" onclick="event.stopPropagation();toggleTheory(null)"><em>Clear all theories</em></div>`;
+    theoriesWithClaims.forEach(t => {
+        html += `<div class="theory-item" data-id="${t.id}" data-name="${escapeHtml(t.name).toLowerCase()}" onclick="event.stopPropagation();toggleTheory(${t.id})">${escapeHtml(t.name)} <span class="count">(${t.claim_count})</span></div>`;
+    });
+    list.innerHTML = html;
+    
+    input.addEventListener('click', () => {
+        list.classList.add('open');
+        document.getElementById('theory-filter').focus();
+    });
+    
+    document.getElementById('theory-filter').addEventListener('input', e => {
+        const filter = e.target.value.toLowerCase();
+        document.querySelectorAll('#theory-list .theory-item[data-name]').forEach(item => {
+            const name = item.dataset.name;
+            item.classList.toggle('hidden', !name.includes(filter));
+        });
+    });
+}
+
+function toggleTheory(id) {
+    if (id === null) {
+        selectedTheoryIds = [];
+    } else {
+        const index = selectedTheoryIds.indexOf(id);
+        if (index > -1) {
+            selectedTheoryIds.splice(index, 1);
+        } else {
+            selectedTheoryIds.push(id);
+        }
+    }
+    updateTheoryTags();
+    updateTheoryListSelection();
+    applyFilters();
+}
+
+function removeTheory(id) {
+    const index = selectedTheoryIds.indexOf(id);
+    if (index > -1) {
+        selectedTheoryIds.splice(index, 1);
+        updateTheoryTags();
+        updateTheoryListSelection();
+        applyFilters();
+    }
+}
+
+function updateTheoryTags() {
+    const container = document.getElementById('theory-tags');
+    document.getElementById('theory-input').value = '';
+    container.innerHTML = selectedTheoryIds.map(id => {
+        const theory = theoriesById[id];
+        const name = theory ? escapeHtml(theory.name) : id;
+        return `<span class="selected-tag">${name}<span class="remove" onclick="event.stopPropagation();removeTheory(${id})">×</span></span>`;
+    }).join('');
+}
+
+function updateTheoryListSelection() {
+    document.querySelectorAll('#theory-list .theory-item[data-id]').forEach(el => {
+        const id = el.dataset.id === 'null' ? null : parseInt(el.dataset.id);
+        el.classList.toggle('selected', id !== null && selectedTheoryIds.includes(id));
+    });
+}
+
 function applyFilters() {
     const search = document.getElementById('search').value.toLowerCase().trim();
-    const folio = document.getElementById('folio-search').value.toLowerCase().trim();
-    const theoryName = document.getElementById('theory-search').value.trim();
-    const theoryId = theoryNameToId[theoryName.toLowerCase()];
     const confidence = document.getElementById('confidence').value;
     const evidence = document.getElementById('evidence').value;
     
     filteredClaims = allClaims.filter(c => {
-        if (folio && !(c.folios || '').toLowerCase().includes(folio)) return false;
-        if (theoryName && !c.theories?.some(t => t.id === theoryId || t.name.toLowerCase().includes(theoryName.toLowerCase()))) return false;
+        if (selectedFolios.length > 0) {
+            const claimFolios = (c.folios || '').toLowerCase();
+            if (!selectedFolios.some(f => claimFolios.includes(f))) return false;
+        }
+        if (selectedTheoryIds.length > 0) {
+            if (!c.theories?.some(t => selectedTheoryIds.includes(t.id))) return false;
+        }
         if (confidence && c.confidence !== confidence) return false;
         if (evidence && c.evidence_type !== evidence) return false;
         if (search && !c.assertion.toLowerCase().includes(search)) return false;
         return true;
     });
     
-    // Sort: established first, then disputed, then speculative
     const order = {established: 0, disputed: 1, speculative: 2};
     filteredClaims.sort((a, b) => (order[a.confidence] ?? 3) - (order[b.confidence] ?? 3));
     
@@ -261,13 +417,11 @@ function createClaimEl(c) {
     
     let html = escapeHtml(c.assertion);
     
-    // Show folio tags
     if (c.folios && c.folios !== 'general') {
         const folioList = c.folios.split(',').slice(0, 3).map(f => f.trim()).join(', ');
         html += ` <span class="meta">[${folioList}]</span>`;
     }
     
-    // Source link
     const src = c.sources?.[0];
     if (src) {
         const url = src.post_id 
@@ -290,14 +444,14 @@ function toggleClaim(el, c) {
     const folioLinks = (c.folios || 'general').split(',').map(f => {
         f = f.trim();
         if (f && f !== 'general') {
-            return `<a onclick="document.getElementById('folio-search').value='${f}';applyFilters();window.scrollTo(0,0);">${f}</a>`;
+            return `<a href="#" onclick="event.preventDefault();selectedFolios=['${f}'];updateFolioTags();updateFolioListSelection();applyFilters();window.scrollTo(0,0);">${f}</a>`;
         }
         return f;
     }).join(', ');
     
     const theoryLinks = (c.theories || []).map(t => {
         const theory = theoriesById[t.id];
-        return `<a onclick="document.getElementById('theory-search').value='${escapeHtml(t.name).replace(/'/g, "\\'")}';applyFilters();window.scrollTo(0,0);">${escapeHtml(t.name)}</a> <span class="stance ${t.stance}">${t.stance}</span>`;
+        return `<a href="#" onclick="event.preventDefault();selectedTheoryIds=[${t.id}];updateTheoryTags();updateTheoryListSelection();applyFilters();window.scrollTo(0,0);">${escapeHtml(t.name)}</a> <span class="stance ${t.stance}">${t.stance}</span>`;
     }).join('<br>') || 'none';
     
     const src = c.sources?.[0];
@@ -322,10 +476,17 @@ function toggleClaim(el, c) {
 
 function clearFilters() {
     document.getElementById('search').value = '';
-    document.getElementById('folio-search').value = '';
-    document.getElementById('theory-search').value = '';
     document.getElementById('confidence').value = '';
     document.getElementById('evidence').value = '';
+    
+    selectedFolios = [];
+    updateFolioTags();
+    updateFolioListSelection();
+    
+    selectedTheoryIds = [];
+    updateTheoryTags();
+    updateTheoryListSelection();
+    
     applyFilters();
 }
 
